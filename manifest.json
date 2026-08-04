@@ -1,6 +1,6 @@
 {
   "name": "Inspetora Hitomi",
-  "short_name": "Hitomi",
+  "short_name": "Inspetora Hitomi",
   "description": "Jogo de dedução lógica — cruze pistas na grade até resolver o caso",
   "start_url": "./index.html",
   "scope": "./",
