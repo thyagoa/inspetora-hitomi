@@ -1398,6 +1398,7 @@ let touchPressTimer = null;
 let touchMoved = false;
 let touchLongFired = false;
 let suppressNextClickUntil = 0;
+let lastTouchStartTime = 0;
 
 function onCandidateClick(ev){
   if (state.solved) return;
@@ -1412,10 +1413,14 @@ function onCandidateRightClick(ev){
   ev.preventDefault();
   if (state.solved) return;
   // no celular, segurar o dedo parado tempo demais também dispara o menu de contexto
-  // nativo do navegador (esse mesmo evento). Se o nosso toque longo já tratou a ação,
-  // ou ainda está pendente, não deixa acontecer de novo.
-  if (touchLongFired) return;
-  touchLongFired = true;
+  // nativo do navegador (esse mesmo evento). Só entra nessa deduplicação se um toque
+  // de verdade aconteceu há pouco — senão isso travava o botão direito do MOUSE pra sempre
+  // depois do primeiro uso (a variável ficava "true" e nunca era resetada sem um toque novo).
+  const recentTouch = (Date.now() - lastTouchStartTime) < 800;
+  if (recentTouch){
+    if (touchLongFired) return;
+    touchLongFired = true;
+  }
   if (touchPressTimer){ clearTimeout(touchPressTimer); touchPressTimer = null; }
   toggleEliminate(ev.currentTarget);
 }
@@ -1429,6 +1434,7 @@ const TOUCH_MOVE_THRESHOLD = 10; // px — abaixo disso, consideramos "toque par
 function onCandidateTouchStart(ev){
   touchMoved = false;
   touchLongFired = false;
+  lastTouchStartTime = Date.now();
   const t = ev.touches[0];
   touchStartX = t.clientX;
   touchStartY = t.clientY;
@@ -1493,6 +1499,12 @@ function toggleConfirm(el){
     if (snap){
       state.marks = snap;
       delete state.confirmSnapshots[key];
+      // não roda a dedução automática aqui de propósito: se essa célula ainda for a
+      // única possibilidade sobrando (porque as outras seguem eliminadas), a cascata
+      // recalcularia e travaria ela nesse mesmo instante. Deixa aberta de verdade —
+      // a dedução volta a rodar normalmente na próxima ação do usuário.
+      renderAllCells();
+      return;
     } else {
       setMark(cat, e, r, 0);
     }
@@ -1502,10 +1514,35 @@ function toggleConfirm(el){
   cascadeAndRender();
 }
 
+// desfaz uma confirmação específica (usa o snapshot salvo, se existir)
+function undoConfirmAt(cat, e, r){
+  const key = `${cat}:${e}:${r}`;
+  const snap = state.confirmSnapshots[key];
+  if (snap){
+    state.marks = snap;
+    delete state.confirmSnapshots[key];
+  } else {
+    setMark(cat, e, r, 0);
+  }
+}
+
+// se essa célula está eliminada só por causa de uma confirmação na mesma linha (mesmo item)
+// ou na mesma coluna (mesmo cômodo), desfaz aquela confirmação primeiro — assim a célula
+// pode voltar a ser uma possibilidade de verdade, como o usuário pediu.
+function undoConfirmedConflict(cat, e, r){
+  for (let r2 = 0; r2 < state.N; r2++){
+    if (state.marks[cat][e][r2] === 2){ undoConfirmAt(cat, e, r2); return; }
+  }
+  for (let e2 = 0; e2 < state.N; e2++){
+    if (state.marks[cat][e2][r] === 2){ undoConfirmAt(cat, e2, r); return; }
+  }
+}
+
 function toggleEliminate(el){
   const cat = el.dataset.cat, e = Number(el.dataset.e), r = Number(el.dataset.r);
   const cur = state.marks[cat][e][r];
   if (cur === 2) return; // já confirmado, não mexe por aqui
+  if (cur === 1) undoConfirmedConflict(cat, e, r);
   if (navigator.vibrate) navigator.vibrate(cur === 1 ? 15 : 30);
   setMark(cat, e, r, cur === 1 ? 0 : 1);
   cascadeAndRender();
@@ -1519,6 +1556,12 @@ function setMark(cat, e, r, val){
     for (let r2 = 0; r2 < state.N; r2++) if (r2 !== r) state.marks[cat][e][r2] = 1;
     for (let e2 = 0; e2 < state.N; e2++) if (e2 !== e) state.marks[cat][e2][r] = 1;
   }
+}
+
+// atualiza a tela (ícones + verificação de vitória) sem rodar a dedução automática
+function renderAllCells(){
+  document.querySelectorAll('table.grid td.cell').forEach((td) => updateCellCandidates(td, true));
+  checkWin();
 }
 
 function cascadeAndRender(){
@@ -1535,7 +1578,7 @@ function cascadeAndRender(){
         if (row.includes(2)) continue;
         const open = [];
         for (let r = 0; r < N; r++) if (row[r] !== 1) open.push(r);
-        if (open.length === 1){ setMark(cat.key, e, open[0], 2); changed = true; }
+        if (open.length === 1){ confirmMark(cat.key, e, open[0]); changed = true; }
       }
       // por cômodo (quais itens ainda podem estar ali)
       for (let r = 0; r < N; r++){
@@ -1544,13 +1587,11 @@ function cascadeAndRender(){
           if (state.marks[cat.key][e][r] === 2) hasO = true;
           if (state.marks[cat.key][e][r] !== 1) open.push(e);
         }
-        if (!hasO && open.length === 1){ setMark(cat.key, open[0], r, 2); changed = true; }
+        if (!hasO && open.length === 1){ confirmMark(cat.key, open[0], r); changed = true; }
       }
     }
   }
-  // re-render todas as células (sparkle nas que acabaram de virar confirmadas)
-  document.querySelectorAll('table.grid td.cell').forEach((td) => updateCellCandidates(td, true));
-  checkWin();
+  renderAllCells();
 }
 
 /* ======================= VITÓRIA ======================= */
